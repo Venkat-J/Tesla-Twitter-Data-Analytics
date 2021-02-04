@@ -1,0 +1,913 @@
+---
+title: "Tesla Twitter Data Analysis Report"
+subtitle: "Create Knowledge Around the Tesla's Twitter Activity"
+author: "Alessandro VARNELLI, Venkat JAYANARASIMHAN, Laura EL AOUFIR"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+abstract: |
+  This report aims to describe how Tesla, leader on the market of luxurious electric cars, communicates with its followers on Twitter through text mining methods. This analysis focusing on Tesla's tweets in 2019 and 2020, but also includes information about tweets referencing Tesla.
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+## What is Tesla?
+
+  Tesla, Inc. is an American electric vehicle and clean energy company based in Palo Alto, California. Tesla's current products include electric cars, battery energy storage from home to grid scale, solar panels and solar roof tiles, as well as other related products and services. (source:https://en.wikipedia.org/wiki/Tesla,_Inc.)
+  
+  In 2019, Tesla's revenue was approximately equal to 25 billions and saw a progression of 15% in its year on year sales.
+
+\newpage
+
+## I. Getting the Twitter Data
+
+### Twitter API
+
+  In order to retrieve Twitter data, we needed to first create a developer account from the Twitter platform and extract our personal credentials to create a valid API. Thanks to the "rtweet" package, we were able to extract Tesla's last 3200 tweets using the get_timelines function. We finally saved this database with a ".rds" extension, using the "mgcv" package.
+
+### Handling the Timeline
+
+  The oldest tweets we could get from this database were from 2013. As a result, we decided to subset only the 2019/2020 tweets from this original database. As Tesla's amount of tweets significantly diminishes in 2020, some parts of the analysis focus only on the 2019 tweets, to be able to gather enough data points to conduct a trustworthy analysis. In total, the Tesla’s Twitter Dataset contains 771 Tweets and 97 features, which are leveraged in this analysis for deriving insights.
+  
+### Quick Overview
+
+Volume: 771
+Followers: 73,98,637
+Retweets: 6,48,332
+Favourites: 57,99,519
+Replies: 289
+Quotes: 0
+Twitter Engagement Rate: 0.11%
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+setwd('C:/Users/lelaoufir/OneDrive - IESEG/Documents/SOCIAL MEDIA ANALYTICS')
+
+Sys.setenv(JAVA_HOME='C:/Program Files/jdk-15.0.2_windows-x64_bin/jdk-15.0.2') # for 64-bit version
+
+# Loading Required Packages
+
+options(warn=-1)
+
+for (i in c('SnowballC','slam','tm','Matrix','tidytext','dplyr','hunspell','purrr','wordcloud','knitr','rtweet','readxl','ggplot2', 'textrank','udpipe','plotly','tidyr', 'stringr', 'forcats','hrbrthemes','mgcv','RWeka','stopwords')){
+  if (!require(i, character.only=TRUE)) install.packages(i, repos = "http://cran.us.r-project.org")
+  require(i, character.only=TRUE)
+}
+
+tesla_tweets <- readRDS(file = "tesla_tweets.rds")
+reply_tweets <- readRDS(file = "reply_tweets.rds")
+reply_status_tweets <- readRDS(file = "reply_status_tweets.rds")
+tweets_contact <- readRDS(file = "tweets_contact.rds")
+contact_interests <- read_excel("interest.xlsx")
+usr_df <- readRDS(file = "usr_df.rds")
+
+# creating variables with the dates column (splitting year, month hour, day)
+tesla_tweets$date <- as.Date(tesla_tweets$created_at)
+tesla_tweets$time <- format(as.POSIXct(tesla_tweets$created_at), format = "%H:%M:%S")
+tesla_tweets$year <- format(as.POSIXct(tesla_tweets$date), format = "%Y")
+tesla_tweets$month <- format(as.POSIXct(tesla_tweets$date), format = "%m")
+tesla_tweets$hour <- format(as.POSIXct(tesla_tweets$created_at), format = "%H")
+tesla_tweets$day_num <- format(tesla_tweets$date,"%u")  
+tesla_tweets$day_num <- as.numeric(tesla_tweets$day_num)
+tesla_tweets$day <- weekdays(as.Date(tesla_tweets$created_at))
+
+# Selecting the tweets from 2019 to 2020
+tesla_tweets <- tesla_tweets %>% filter(date >= "2019-01-01" & date <= "2020-12-31")
+  
+```
+
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+kable(tesla_tweets[1:5,1:5])
+
+```
+
+\newpage
+
+## II. How Does Tesla Reply to its Customers?
+
+  Tesla has posted a total number of 289 Tweets in response to its customers tweets, out of which they also addressed a total number of 259 unique customers.
+
+### Response to Personal Vs Business Profiles
+  
+  Tesla has shown keen focus to respond to Personal twitter profiles comparing to the Business profiles. From 2019, Tesla has addressed a total number of 218 (75%) Personal Accounts and 33 (11%) Business Accounts.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Fetching the Number of Personal & Business Accounts through Verified Status
+
+Personal <- sum(usr_df$verified == "FALSE")
+Business <- sum(usr_df$verified == "TRUE")
+
+Personal_Percent <- round((Personal/nrow(reply_tweets))*100)
+Business_Percent <- round((Business/nrow(reply_tweets))*100)
+
+# Creating Pie-Chart for Replies to Personal Vs Business Profiles
+
+#create data frame
+data <- data.frame("Profile" = c('Personal Profile', 'Business Profile'),
+                   "Replies" = c(Personal, Business))
+
+Percent <- c(Personal_Percent,Business_Percent)
+
+#create pie chart
+ggplot(data, aes(x="", y=Replies, fill=Profile)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = (paste0(Percent, "%"))), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank()) +
+  scale_fill_brewer(palette="Greens")
+
+```
+### Response to Mentioned Vs Non-Mentioned Tweets
+
+  Tesla majorly responds to the posts which mention them explicitly. Out of the 289 reply tweets, Tesla has responded to 249 (86%) Mentioned tweets and only 40 (14%) Non mentioned tweets.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Getting the Number of Reply Tweets for Mentions Vs No Mentions
+
+Mention            <- sum(grepl('@', reply_status_tweets$text) | grepl('#', reply_status_tweets$text))
+No_Mention         <- nrow(reply_tweets) - Mention
+
+Mention_Percent    <- round((Mention/nrow(reply_tweets))*100)
+No_Mention_Percent <- round((No_Mention/nrow(reply_tweets))*100)
+
+# Creating Pie-Chart for Replies to Mentioned Vs Non-Mentioned Tweets
+
+#create data frame
+data <- data.frame("Tweets" = c('Mentioned Tweets', 'Non Mentioned Tweets'),
+                   "Replies" = c(Mention, No_Mention))
+
+Percent <- c(Mention_Percent,No_Mention_Percent)
+
+#create pie chart
+ggplot(data, aes(x="", y=Replies, fill=Tweets)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = (paste0(Percent, "%"))), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank()) +
+  scale_fill_brewer(palette="Oranges")
+
+  
+```
+### Response to Positive Vs Negative Vs Neutral Tweets
+
+  Tesla prefers to respond to Positive Tweets over Negative ones. Interestingly, Tesla also prefers to respond to Negative Tweets over Neutral Tweets. Since 2019, Tesla has responded to a total number of 156 (61%) positive tweets, 68 (26%) negative tweets and 33 (13%) neutral tweets.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Preparing a clean dataset for Sentiment Analysis
+
+#  Remove punctuation and numbers with regular expressions
+reply_source_tweets <- mutate(reply_status_tweets, text = gsub(x = text, pattern = "[0-9]+|[[:punct:]]|\\(.*\\)", replacement = ""))
+
+#  Tokenization (+ going to lowercase)
+tweet_sentiment_Tokenized <- reply_source_tweets %>%  unnest_tokens(output = "word", # how should the new column be named?
+                                                  input = text, # where can we find the text? 
+                                                  token = "words", # which tokenization scheme should we follow?
+                                                  drop=FALSE,to_lower=TRUE) # drop=FALSE specifies that we want to keep our text; to_lower puts everyting to lowercase
+
+# Matching the Tweets with the Dictionary
+
+tweet_sentiment <- inner_join(tweet_sentiment_Tokenized, get_sentiments("bing"))
+
+# Aggregating the Sentiments over each Tweet
+
+Source_Tweet_Sentiment <- tweet_sentiment %>%
+                          count(status_id, sentiment) %>%  # count the positives and negatives per id (status)
+                          pivot_wider(id_cols = status_id, names_from=sentiment,values_from=n, values_fill = 0) %>%
+                          mutate(sentiment = positive - negative)
+
+# Also including the Neutral Sentiments in addition to the Postive and Negative Tweets
+
+Source_Tweet_Sentiment <- reply_source_tweets %>% left_join(Source_Tweet_Sentiment,by="status_id") %>% 
+                                                            mutate(sentiment = ifelse(is.na(sentiment),0,sentiment))
+
+# Calculating the Number of Positive, Negative and Neutral Tweets
+
+Source_Tweet_Sentiment$positive[is.na(Source_Tweet_Sentiment$positive)]   <- 0
+Source_Tweet_Sentiment$negative[is.na(Source_Tweet_Sentiment$negative)]   <- 0
+
+positive <- sum(Source_Tweet_Sentiment$positive)
+negative <- sum(Source_Tweet_Sentiment$negative)
+neutral  <- nrow(reply_source_tweets) - (positive+negative)
+
+positive_percent <- round((positive/nrow(reply_source_tweets))*100)
+negative_percent <- round((negative/nrow(reply_source_tweets))*100)
+neutral_percent  <- round((neutral/nrow(reply_source_tweets))*100)
+
+# Creating Pie-Chart for Replies to Positive, Negative and Neutral Tweets
+
+#create data frame
+data <- data.frame("Sentiment" = c('Positive Tweets', 'Negative Tweets', 'Neutral Tweets'),
+                   "Replies"   = c(positive, negative, neutral))
+
+Percent <- c(positive_percent, negative_percent, neutral_percent)
+
+#create pie chart
+ggplot(data, aes(x="", y=Replies, fill=Sentiment)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = (paste0(Percent, "%"))), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank()) +
+  scale_fill_brewer(palette="Blues")
+
+  
+```
+\newpage
+
+## III. Overall Summary of Tesla's Tweets
+
+  Tesla has an overall volume of 771 Tweets with 73,98,637 followers, 6,48,332 Retweets and 57,99,519 Favourites.
+  
+### Twitter Engagement Rate
+
+  The twitter engagement rate is calculated based on the retweets, favourites, quotes, replies and followers count.
+  
+  The average Twitter engagement rate of Tesla is 0.11%. Tesla has a huge scope in increasing its twitter engagement rate by increasing its reply and quote counts.
+
+### Directed Vs Un-Directed Tweets
+
+  Based on the Tesla’s Twitter posts, it posts Directed Tweets slightly higher than the Un-Directed posts.
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Converting any NA value to 0
+
+tesla_tweets$retweet_count[is.na(tesla_tweets$retweet_count)]   <- 0
+tesla_tweets$favorite_count[is.na(tesla_tweets$favorite_count)] <- 0
+tesla_tweets$quote_count[is.na(tesla_tweets$quote_count)]       <- 0
+tesla_tweets$reply_count[is.na(tesla_tweets$reply_count)]       <- 0
+
+# Calculating the Number of directed or undirected tweets
+
+Directed     <- sum(grepl('@', tesla_tweets$text) | grepl('#', tesla_tweets$text))
+Non_Directed <- nrow(tesla_tweets) - Directed
+
+Directed_Percent     <- round((Directed/nrow(tesla_tweets))*100)
+Non_Directed_Percent <- round((Non_Directed/nrow(tesla_tweets))*100)
+
+# Creating Pie-Chart for Directed and Non-Directed Tweets
+
+#create data frame
+data <- data.frame("Tweets" = c('Directed Tweets', 'Non Directed Tweets'),
+                   "Amount"   = c(Directed, Non_Directed))
+
+Percent <- c(Directed_Percent, Non_Directed_Percent)
+
+#create pie chart
+ggplot(data, aes(x="", y=Amount, fill=Tweets)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = (paste0(Percent, "%"))), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank()) +
+  scale_fill_brewer(palette="BuGn")
+
+
+```
+### Number of Tweets over Time
+
+  Tesla posted a maximum number of tweets in the month of April 2019.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Creating Time-Series graph for the frequency of tweets by Tesla
+
+ts_plot(tesla_tweets, by = "months", trim = 0L, tz = "UTC")
+
+# Number of tweets posted reached it's maximum around April 2019
+  
+```
+
+### Tweets Type Distribution
+
+  Tesla's approach to releasing tweets is interesting as it uses only 37% of organic tweets. However, for example, when looking at the SpaceX twitter account, which is a company also directed by Elon Musk, the organic tweets represent more than 75% of the tweeting strategy.
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Keeping only the retweets
+tesla_retweets <- tesla_tweets[tesla_tweets$is_retweet==TRUE,]
+
+# Keeping only the replies
+tesla_replies <- subset(tesla_tweets, !is.na(tesla_tweets$reply_to_status_id))
+
+# Keeping only the organic tweets
+tesla_tweets_organic <- tesla_tweets[tesla_tweets$is_retweet==FALSE, ] 
+tesla_tweets_organic <- subset(tesla_tweets_organic, is.na(tesla_tweets_organic$reply_to_status_id))
+
+# Creating a data frame to create a graph
+data <- data.frame(
+  category=c("Organic", "Retweets", "Replies"),
+  count=c(282, 78, 411)
+)
+
+# Adding columns with counts and fractions of tweets types
+data$fraction = data$count / sum(data$count)
+data$percentage = data$count / sum(data$count) * 100
+data$ymax = cumsum(data$fraction)
+data$ymin = c(0, head(data$ymax, n=-1))
+
+# Function to round
+round_df <- function(df, digits) {
+  nums <- vapply(df, is.numeric, FUN.VALUE = logical(1))
+
+  df[,nums] <- round(df[,nums], digits = digits)
+
+  (df)
+}
+
+# Rounding the data to two decimal points
+data <- round_df(data, 2)
+
+# Specify what the legend should say
+Type_of_Tweet <- paste(data$category, data$percentage, "%")
+ggplot(data, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=Type_of_Tweet)) +
+  geom_rect() +
+  coord_polar(theta="y") + 
+  xlim(c(2, 4)) +
+  theme_void() +
+  theme(legend.position = "right")
+  
+```
+
+### Tweets Source
+
+  Using the "source" variable of the dataset, we are able to understand where the tweets are deployed from. Predominantly, the tweets are released from the "Twitter Web Client" platform, but is it interesting to note that 10% of the tweets are coming from an Apple phone, which could imply that Elon Musk is tweeting 10% of the tweets himself.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+## Tweets location
+tesla_app <- tesla_tweets %>% 
+  select(source) %>% 
+  group_by(source) %>%
+  summarize(count=n())
+
+tesla_app <- subset(tesla_app, count > 11)
+
+  
+## Creating a dataframe with source and count of tweets per source
+data <- data.frame(
+  category=tesla_app$source,
+  count=tesla_app$count
+)
+data$fraction = data$count / sum(data$count)
+data$percentage = data$count / sum(data$count) * 100
+data$ymax = cumsum(data$fraction)
+data$ymin = c(0, head(data$ymax, n=-1))
+data <- round_df(data, 2)
+Source <- paste(data$category, data$percentage, "%")
+ggplot(data, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=Source)) +
+  geom_rect() +
+  coord_polar(theta="y") + # Try to remove that to understand how the chart is built initially
+  xlim(c(2, 4)) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+
+### Tweets Frequency (2019)
+
+  Tesla is tweeting on average 3 tweets per day. However, the number of tweets can significantly vary according to the month or the day of the week we are considering.
+  
+  This frequency analysis focuses on tweets released in 2019, as the count of 2020 tweets are rather low.
+    
+#### By Month
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# taking only the tweets from 2020
+tesla_tweets_2019 <- tesla_tweets %>% filter(year==2019)
+
+# BY MONTH
+# plotting number of tweets
+bymonth_plot <- tesla_tweets_2019 %>% group_by(month) %>% summarize(count = n())
+
+# plotting
+ggplot(bymonth_plot, aes(y=month, x=count)) +
+  geom_bar(stat = "identity", width=0.5) +
+  geom_text(aes(label=paste(round(count/742*100,1),"%",sep="")),hjust=-0.1, col="red", size=2.5) +
+  labs(title= "Distribution of tweets per month in 2019",
+       y="month", x = "number of tweets")
+```
+
+#### By Day
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# BY DAY
+# plotting number of tweets
+byday_plot <- tesla_tweets_2019 %>% group_by(day, day_num) %>% summarize(count = n())
+
+# plotting
+ggplot(byday_plot, aes(y=reorder(day,-day_num), x=count)) +
+  geom_bar(stat = "identity", width=0.5) +
+  geom_text(aes(label=paste(round(count/742*100,1),"%",sep="")),hjust=-0.1, col="red", size=2.5) +
+  labs(title= "Distribution of tweets per day of the week in 2019",
+       y="weekday", x = "number of tweets")
+
+```
+
+#### By Hour
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+# BY HOUR
+# plotting number of tweets
+byhour_plot <- tesla_tweets_2019 %>% group_by(hour) %>% summarize(count = n())
+
+# plotting
+ggplot(byhour_plot, aes(y=hour, x=count)) +
+  geom_bar(stat = "identity", width=0.5) +
+  geom_text(aes(label=paste(round(count/742*100,1),"%",sep="")),hjust=-0.1, col="red", size=2.5) +
+  labs(title= "Distribution of tweets per hour of the day in 2019",
+       y="hour of the day", x = "number of tweets")
+```
+
+#### Heat Map: Weekly Overview
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Weekly overview frequency with a heat map
+tweets_day_hour <- tesla_tweets_2019 %>% group_by(day,day_num,hour) %>% summarize(count = n())
+
+# plotting
+ggplot(tweets_day_hour, aes(x=hour, y=reorder(day,day_num))) +
+    geom_tile(aes(fill=count)) +
+    scale_fill_gradient(low="white", high="blue")+
+  geom_text(aes(label=paste(round(count/742*100,1),"%",sep="")),hjust=-0.1, col="black", size=1) +
+  labs(title= "Distribution of tweets per hour of the day and day of the week in 2019",
+       y="day of the week", x = "hour of the day")
+
+```
+
+### Use of Emojis (2019)
+
+  Tesla uses very few emojis in its tweets. However, the emojis that they use are diverse and quite male connoted.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# cleaning the text data and removing the retweets
+tesla_tweets %>%
+  filter(!is_retweet) %>% 
+  select(text) %>% 
+  mutate(text = gsub(pattern = "\\n\\n", replacement = "\\n", x = text)) %>%
+  head()  %>%
+  knitr::kable(escape = TRUE)
+
+# removing anything but a potential emoji
+text_only <- tesla_tweets_2019 %>%
+  filter(!is_retweet) %>%
+  mutate(
+    # add spaces before the # and @
+    clean_text = gsub(x = text, pattern = "(?=@)",
+                      replacement = " ", perl = TRUE) %>%
+      gsub(x = ., pattern = "(?=#)", replacement = " ", perl = TRUE) %>%
+      str_replace_all(pattern = "\n", replacement = "") %>%
+      str_replace_all(pattern = "&amp;", replacement = "") %>%
+      # remove accounts mentionned with an @
+      str_replace_all(pattern = "@([[:punct:]]*\\w*)*", replacement = "") %>%
+      # remove URLs
+      str_replace_all(pattern = "http([[:punct:]]*\\w*)*", replacement = "") %>%
+      # remove punctuaction signs except #
+      gsub(x = ., pattern = "(?!#)[[:punct:]]",
+           replacement = "", perl = TRUE) %>%
+      # lowercase the text
+      tolower() %>%
+      # remove isolated digits
+      str_replace_all(pattern = " [[:digit:]]* ", replacement = " ")
+  )
+```
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+all_emojis_in_tweets <- emojis %>% 
+  # for each emoji, find tweets containing this emoji       
+  mutate(tweet = map(code, ~grep(.x, text_only$text))) %>% 
+  unnest(tweet) %>%
+  # count the number of tweets in which each emoji was found           
+  count(code, description) %>% 
+  mutate(emoji = paste(code, description)) 
+
+# Define a personnal theme for the plot colours (source:https://marionlouveaux.fr/blog/2020-04-18_analysing-twitter-data-with-r-part3/)
+
+custom_plot_theme <- function(...){
+  theme_classic() %+replace%
+    theme(panel.grid = element_blank(),
+          axis.line = element_line(size = .7, color = "black"),
+          axis.text = element_text(size = 11),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 11),
+          legend.title = element_text(size = 12),
+          legend.key.size = unit(0.4, "cm"),
+          strip.text.x = element_text(size = 12, colour = "black", angle = 0),
+          strip.text.y = element_text(size = 12, colour = "black", angle = 90))
+}
+
+## Set theme for all plots 
+theme_set(custom_plot_theme())
+
+# Define a palette for graphs
+greenpal <- colorRampPalette(brewer.pal(9,"Greens"))
+
+# plotting the most used emojis
+all_emojis_in_tweets %>% 
+  top_n(20, n) %>% 
+ggplot() +
+  geom_col(aes(x = fct_reorder(emoji, n), y = n, fill = n), 
+           colour = "grey30", width = 1) +
+  labs(x = "", y = "Count", title = "Most used emojis") +
+  coord_flip() +
+  scale_fill_gradientn("n", colours = greenpal(10), guide = "none") +
+  scale_y_continuous(expand = c(0, 0),
+                     breaks=seq(0, 10, 2), limits = c(0,10)) +
+  scale_x_discrete(expand = c(0, 0)) 
+```
+
+### Most and Least Favorite Tweets
+
+  Below are the 5 tweets with the most favorites.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# favourites
+tesla_favourites <- tesla_tweets_organic %>% arrange(-favorite_count)
+tesla_favourites[1:5,5]
+
+
+```
+
+  Below are the 5 tweets that have been retweeted the most.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# most retweet
+tesla_most_retweets <- tesla_tweets_organic %>% arrange(-retweet_count)
+tesla_most_retweets[1:5,5]
+
+```
+
+  Below are the 5 tweets with the least favorites.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# least favourites
+tesla_least_favourites <- tesla_tweets_organic %>% arrange(favorite_count)
+tesla_least_favourites[1:5,5]
+```
+
+  Below are the 5 tweets that have been retweeted the least.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# least retweets
+tesla_least_retweets <- tesla_tweets_organic %>% arrange(retweet_count)
+tesla_least_retweets[1:5,5]
+```
+
+  Here, we can picture the number of favorites over time.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# number of favourites per tweets per month in 2019
+favourites_plot <- tesla_tweets_2019 %>% group_by(month) %>% summarize(count = sum(favorite_count))
+
+# plotting
+ggplot(favourites_plot, aes(y=count, x=month)) +
+  geom_bar(stat = "identity", width=0.5) +
+  geom_text(aes(label=paste(round(count/5066025*100,1),"%",sep="")),vjust=-1, col="red", size=2.5) +
+  labs(title= "Distribution of favorites per month in 2019",
+       y="month", x = "number of favorites")
+
+```
+
+### Use of Images in Tweets
+
+  Tesla is using only the 'photo' type of media in their tweets. There is no presence of video or gifs.
+  
+  Over the year 2019, the company used 92 images, which represents approximately 12% of its tweets.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+# type of media used
+unique(tesla_tweets_2019$media_type)
+```
+  This graph informs us on how Tesla uses images in tweets over the year 2019. We can conclude a certian seasonality in car sales, which we have confirmed by searching on the Internet. The peak seasons for the automobile industry are situated in the late srping and November.  The use of images in September tells us that Tesla was surely communicating on their models at that time.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+# number of tweets with images per month
+images_usage_plot <- tesla_tweets_2019 %>% filter(!is.na(media_url)) %>% group_by(month) %>% summarize(count = n())
+
+# plotting
+ggplot(images_usage_plot, aes(y=count, x=month)) +
+  geom_bar(stat = "identity", width=0.5) +
+  geom_text(aes(label=paste(round(count/92*100,1),"%",sep="")),vjust=-1, col="red", size=2.5) +
+  labs(title= "Distribution of images per month in 2019",
+       y="month", x = "number of images used")
+```
+
+\newpage
+
+  Tesla most retweeted tweet with an image was the following:
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Define variable containing url
+url1 <- "http://pbs.twimg.com/ext_tw_video_thumb/1095884933334069249/pu/img/_YCYsC28hpWehxax.jpg"
+```
+
+<center><img src="`r url1`"></center>
+
+\newpage
+
+Tesla least retweeted tweet with an image was the following:
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Define variable containing url
+url2 <- "http://pbs.twimg.com/media/D_JsxnmVAAE1r_l.jpg"
+```
+
+<center><img src="`r url2`"></center>
+
+\newpage
+
+## VI. Twitter Users Responding / Approaching Tesla
+
+  Tesla boasts a huge follower base in Twitter, thus it attracts more profiles responding to its tweets and also more profiles approaching the company for updates, queries and feedback.
+
+### Accounts Retweeting Tesla's Tweets
+
+  Here is a wordcloud representing the accounts which retweet Tesla's tweets the most. Wihtout surprises, Elon Musk is predominantly retweeting.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Creating Retweet Account WordCloud
+
+set.seed(1234)
+wordcloud(tesla_tweets$retweet_screen_name, min.freq=3, scale=c(2, .5), random.order=FALSE, rot.per=0.25, 
+          colors=brewer.pal(8, "Dark2"))
+
+```
+### Top Locations of People contacting Tesla
+
+  The people who contact the company are based in 60 unique locations. The top locations are UK, Nigeria, US, and Netherlands.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Plotting the Top Locations of people contacting Tesla
+
+length(unique(tweets_contact$location))
+
+tweets_contact %>%
+  filter(location != "") %>%
+  filter(location != "Earth") %>%
+  count(location, sort = TRUE) %>%
+  mutate(location = reorder(location,n)) %>%
+  na.omit() %>%
+  top_n(3) %>%
+  ggplot(aes(x = location,y = n)) +
+  geom_col(fill = "#0099f9") +
+  theme_classic() +
+  coord_flip() +
+      labs(x = "Location",
+      y = "Count",
+      title = "Unique Locations - People Who Contact Tesla")
+
+```
+### Top Interests of People contacting Tesla
+
+  The people contacting Tesla are majorly interested in topics like Bitcoin, Electric Cars and Technology related news.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Plotting the Top Interests of people contacting Tesla
+
+contact_interests %>%
+  count(slug, sort = TRUE) %>%
+  mutate(slug = reorder(slug,n)) %>%
+  na.omit() %>%
+  top_n(5) %>%
+  ggplot(aes(x = slug,y = n)) +
+  geom_col(fill = "#0099f9") +
+  theme_classic() +
+  coord_flip() +
+      labs(x = "Topics of Interest",
+      y = "Count",
+      title = "Interests of People Contacting Tesla")
+
+```
+
+
+\newpage
+
+
+## V. Sentiment Analysis
+
+  The main goal of this section is to conduct a sentiment analysis on the contents of Tesla's tweets, in order to extract a clear idea of the emotion associated to tweets from Tesla and its evolution over time.
+  
+  To do so, it is of course necessary to clean the data and preprocess the content.
+
+  The first step is the removal of punctuation, of symbols and of numbers. At this point what we did was to tokenize all the text for further steps, such as stemming and lemmatization. 
+
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# Removing punctutation, symbols, numbers
+tesla_tweets <- mutate(tesla_tweets, text = gsub(x = text, pattern = "[0-9]+|[[:punct:]]|\\(.*\\)", replacement = ""))
+head(tesla_tweets$text)
+
+# tokenisation
+tesla_tweets_tokenized <- tesla_tweets %>% unnest_tokens(output = "word", input = text, token ="words", drop = FALSE, to_lower = TRUE)
+tesla_tweets_tokenized[1:5,c(1,2,5,98)]
+
+```
+
+  After the cleaning, we proceeded with the join of the tokenized words with the BING dictionary, in order to get a sentiment to them.
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+# correcting the spelling with a function
+
+correct_spelling <- function(input) {
+  output <- case_when(
+    # any manual corrections
+    input == 'license' ~ 'licence',
+    # check and (if required) correct spelling
+    !hunspell_check(input, dictionary('en_GB')) ~
+      hunspell_suggest(input, dictionary('en_GB')) %>%
+      # get first suggestion, or NA if suggestions list is empty
+      map(1, .default = NA) %>%
+      unlist(),
+    TRUE ~ input # if word is correct
+  )
+  # if input incorrectly spelled but no suggestions, return input word
+  ifelse(is.na(output), input, output)
+}
+
+# now, apply the function above to each word in our dataset.
+# create a new variable that contains the 'corrected' word
+tesla_tweets_tokenized <- tesla_tweets_tokenized %>%  mutate(suggestion = correct_spelling(word))
+
+#we want to tokenize and delete the stopwords
+tesla_tweets_tokenized <- tesla_tweets_tokenized %>% anti_join(get_stopwords())
+
+# stemming
+tesla_tweets_tokenized <- tesla_tweets_tokenized %>% mutate(word = wordStem(word))
+
+#for the scope of this analysis we limited the dictionary usage to the BING one.
+tesla_tweets_sentiment<- inner_join(tesla_tweets_tokenized, get_sentiments("bing"))
+
+tesla_tweets_sentiment[1:5,c(1,2,5,98,99,100)]
+```
+
+### Words Frequency and Sentiment
+
+  Then we decided to plot the summary of the words, and of their sentiment of course, in order to understand how much they were used.
+  
+  So as we can see from the plot, positive words are much more used than negative ones. Positive concepts used here are "freedom", "being better", "being the best", "good - great", while the most recurring negative ones are recalling "weird products", "crashes", "burning and combustible".
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+#here we want to get a plot of the summary of the most used words and their meaning
+
+#get the most positive / negative words 
+summarySentiment <- tesla_tweets_sentiment %>% count(word, sentiment, sort = TRUE) %>% group_by(sentiment) %>% top_n(10) %>% arrange(n) %>% as.data.frame(stringsAsFactors = FALSE)
+
+summarySentiment %>%
+    ungroup() %>%
+    mutate(word = reorder(word, n)) %>%
+    ggplot(aes(word, n, fill = sentiment)) + 
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~sentiment, scales = "free_y") +
+    labs(y="Contribution to sentiment", x = NULL) + coord_flip()
+
+```
+
+  Finally, we obtained a summary sentiment for each tweet, so to get a clear emotion associated to a tweet, taking in consideration the overall positive and negative sentiments recalled in the text.
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+statusSentiment <- tesla_tweets_sentiment %>% count(status_id, sentiment) %>% pivot_wider(id_cols = status_id, names_from = sentiment, values_from = n, values_fill = 0) %>% mutate(sentiment = positive - negative)
+
+head(statusSentiment)
+
+```
+
+### Sentiment over Time
+
+  We decided to plot the evolution of sentiment overtime.
+  
+  From this we can see that the most positive tweets were made in September - Novembre 2019, not randomly, as it is the period of time known for the presentation of the Tesla Cybertruck, which went viral for the level of innovation and risk that it represented for the Company.
+
+  This sentiment analysis has quite limited insights and takeaways as, being a Company page, tweets are most of the times neutral or slightly positive, but they don't really include many negative emotions or strong sentiment at all.
+
+  
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+prova <- intersect(statusSentiment$status_id, tesla_tweets_sentiment$status_id)
+
+support_time <- tesla_tweets_sentiment[tesla_tweets_sentiment$status_id %in% prova, ]
+
+#We tried to exclude the tweets for which we didn't obtained a strong sentiment expression
+uneeded <- which(!rownames(support_time) %in% rownames(statusSentiment))
+
+#wait for the line below to check whether it was necessary
+environment2 <- support_time[-uneeded,]
+
+#as we want to get a plot of the sentiment over time, we need to convert the dates  
+statusSentiment$time <- as.POSIXct(environment2$created_at, format ="%Y-%m-%dT%H:%M:%S", tz = "UTC")
+
+#we re subset to make sure to just have tweets from January 2019
+statusSentiment_graph <- subset(statusSentiment, time > '2019-01-01')
+
+# plotting the sentiments over time
+graph1 <- ggplot(statusSentiment_graph %>% arrange(time), aes(x = time, y = sentiment)) + geom_line() + labs(y="Valence", x = "Time", title ="Sentiment")
+
+graph1
+
+```
+
+## VI. Concept Analysis
+
+### Main Concepts
+
+  We decided to keep the concept analysis simple and effective. For this we decided to implement wordclouds in order to extract just the main ideas that are most frequently evocated in the tweets in analysis.
+  
+  We did so through the usage of Lemmas and cooccurrences. First with single words:
+  
+#### 1 word
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+#we want to obtain some wordclouds to better understand which are the most recurrent concepts in Tesla's Tweets
+ud_model <- udpipe_download_model(language="english")
+ud_model <- udpipe_load_model(ud_model$file_model)
+
+x <- udpipe_annotate(ud_model, x = tesla_tweets$text)
+x <- as.data.frame(x)
+
+stats <- subset(x, upos %in% c("NOUN", "ADJ"))
+stats <- txt_freq(x = stats$lemma)
+
+#with one word
+options(warn=-1)
+wordcloud(stats$key, stats$freq, max.words= 40, scale = c(3,1))
+
+```
+
+#### Co-occurences
+
+``` {r echo=FALSE, message=FALSE, warning= FALSE}
+
+cooc <- cooccurrence(x= x$lemma, relevant = x$upos %in% c("NOUN", "ADJ"), skipgram = 2)
+
+
+#with 2 words
+options(warn =-1)
+wordcloud(paste(cooc$term1, cooc$term2), cooc$cooc, max.words=40, scale = c(3,1))
+
+```
+
+### Limits
+
+**Research and brainstorm about possible solutions / packages:**
+
+1)	Collection of Historical Tweets
+
+•	Initially, utilized search_fullarchive() function in the rtweet package to collect all the historical tweets of Tesla from the year 2019 to 2020.
+•	Faced difficulty in extracting the same as this is a Premium API option.
+•	After discussion, found an alternate solution and managed to extract the tweets through get_timelines() function in rtweet package, which could collect a maximum of 3200 tweets.
+•	We then subset this dataset from 2019 to 2021 to get the desired dataset.
+
+2)	Library Selection for Sentiment Analysis
+
+•	At first, planned to perform the Sentiment Analysis using the AFINN dictionary, which represents the sentiments in the range of -5 to +5.
+•	Experienced technically difficulty in loading the text_data package (AFINN dictionary) inside the CoCalc environment.
+•	Resolved this issue by performing the sentiment analysis in RStudio and also extended this analysis using the Bing dictionary.
+•	Compared the results of both dictionaries and found that there is no significant difference.
+•	Finally, as the end results were not compromised, utilized the Bing dictionary to perform the Sentiment Analysis in the CoCalc environment itself.
+
+
+
+
+
+
+
+
